@@ -1,0 +1,310 @@
+model Test_Baterias_3
+  options noimplicit
+  uses "mmxprs","mmsheet"
+
+  declarations
+
+
+    !Simulación con datos de la operación del SEN durante el año 2021
+
+    !365 días en total
+    T = 24*(366+365) !número de horas
+    !Número de duración de almacenamiento diferentes
+    N = 7
+    !Número de escenarios
+    Es = 3
+    !Número de tecnologías BESS a considerar
+    Tec = 7
+    !Índice
+    I: integer
+
+    !Centrales ERNC
+    !! Eólica
+
+    !!! Parámteros
+    P_max_eol: real
+    Curva_eol: array (1..T) of real
+    INV_eol: array(1..Es) of real
+    Reserva_eol: array (1..T) of real
+    !!! Variables decisión
+    P_eol: array(1..T) of mpvar
+    Cap_eol: mpvar
+    !!! Restricciones
+    max_P_eol, min_P_eol: array(1..T) of linctr
+
+
+    !! Solar
+
+    !!! Parámetros
+    P_max_sol: real
+    Curva_sol: array (1..T) of real
+    INV_sol: array(1..Es) of real
+    Reserva_sol: array (1..T) of real
+    !!! Variables Decisión
+    P_sol: array(1..T) of mpvar
+    Cap_sol: mpvar
+    !!! Restricciones
+    max_P_sol, min_P_sol: array(1..T) of linctr
+
+
+    !Baterías
+
+    !!! Parámetros
+    INV_bat_P, INV_bat_E: real
+    INV_bat: array(1..N,1..Es) of real
+    E_max_bat: array(1..N) of integer
+    E_max_bat_1, E_max_bat_2, E_max_bat_3: real
+    Cap_bat_1, Cap_bat_2, Cap_bat_3: real
+    Ef_bat_desc, Ef_bat_carg: real
+    !!! Variables decisión
+    P_bat_charge: array(1..T,1..Tec) of mpvar
+    P_bat_discharge: array(1..T,1..Tec) of mpvar
+    E_bat: array(1..T,1..Tec) of mpvar
+    Reserva_bat: array(1..T) of mpvar
+    T_1, T_2, T_3, T_4, T_5, T_6, T_7: mpvar !Tecnologías, T_1 con 1 MW y 1 MWh
+    !!! Restricciones
+    max_E_bat, min_E_bat: array(1..T,1..Tec) of linctr
+    max_P_bat1, max_P_bat2: array(1..T,1..Tec) of linctr
+    Baterias: array(1..T,1..Tec) of linctr
+    Reserva_bat_P, Reserva_bat_E: array(1..T,1..Tec) of linctr
+
+
+
+    !Otros
+
+    !!! Parámetros
+    Dem: array(1..T) of real
+    horas: list of integer
+    Esce: integer
+    !!! Restricciones
+    FO: linctr
+    balance: array(1..T) of linctr
+    Reserva_total: array(1..T) of linctr
+
+
+    !-----(Resultados)-----!
+
+    !Valor función objetivo
+    Solucion: real
+
+    !Capacidad instalada
+    Cap_final: array(1..N) of real
+    Cap_final_sol: real
+    Cap_final_eol: real
+
+    !Costos operacion
+    Costos_op: real
+
+    !Despachos
+    Desp_eol: array(1..T) of real
+    Desp_sol: array(1..T) of real
+    Desp_bat: array(1..T,1..Tec) of real
+    LL_final: array(1..T) of real
+
+    !Demanda no suministrada
+    Demanda_F: array(1..N) of real
+
+    !Carga y descarga baterias
+    P_charge: array(1..T,1..Tec) of real
+    P_discharge: array(1..T,1..Tec) of real
+    P_bat: array(1..T,1..Tec) of real
+    E_final: array(1..T,1..Tec) of real
+    
+    !Vertimiento
+    Ver_sol: array(1..T) of real
+    Ver_eol: array(1..T) of real
+  end-declarations
+
+  !Importación de datos desde Excel
+  initialisations from 'mmsheet.excel:' + 'Datos_Memoria_3.xlsx'
+    P_max_eol               as "noindex;P_max_eol"
+    Curva_eol               as "noindex;Curva_eol"
+    INV_eol                 as "noindex;Inv_eol"
+    P_max_sol               as "noindex;P_max_sol"
+    Curva_sol               as "noindex;Curva_sol"
+    INV_sol                 as "noindex;INV_sol"
+    Ef_bat_desc             as "noindex;Ef_bat_desc"
+    Ef_bat_carg             as "noindex;Ef_bat_carg"
+    INV_bat                 as "noindex;Inv_bat_def"
+    Dem                     as "noindex;Demanda"
+    E_max_bat               as "noindex;E_max_def"
+  end-initialisations
+
+  E_max_bat_1 := 1
+  Cap_bat_1 := 1
+  I := 1
+  horas := [1, 3, 6, 10, 12, 24, 48]
+  Esce := 3
+  
+  !Considerar capacidades de 1, 6, 12, 24 y 48 horas
+
+  !-----(Planteamiento del problema)-----!
+
+  !Función objetivo
+  !eol 7 y sol 1-2 mwh cvnc problema degenerado
+  !La idea de esta función objetivo es que nos entregue la capacidad de baterías óptima que hay que instalar, junto con las capacidades eólica y solar
+
+  FO:= T_1*(INV_bat(1,Esce)) + T_2*(INV_bat(2,Esce)) + T_3*(INV_bat(3,Esce)) +
+       T_4*(INV_bat(4,Esce)) + T_5*(INV_bat(5,Esce)) + T_6*(INV_bat(6,Esce)) + T_7*(INV_bat(7,Esce)) +
+       INV_eol(Esce)*Cap_eol + INV_sol(Esce)*Cap_sol +
+       sum(t in 1..T) (7*P_eol(t) + 2*P_sol(t))
+
+  !Sujeto a:
+
+  !Ecuación de balance
+  forall(t in 1..T) do
+    balance(t):= P_eol(t) + P_sol(t) + sum(i in 1..Tec) (P_bat_discharge(t,i)) = Dem(t) + sum(i in 1..Tec) (P_bat_charge(t,i))
+  end-do
+  
+  !Reservas del sistema
+  !forall(t in 1..T) do
+  !  Reserva_total(t):= (P_eol(t) + Cap_eol)*Curva_eol(t) + (P_sol + Cap_sol)*Curva_sol(t) + T_1*Cap_bat_1 - P_eol(t) - P_sol(t) - P_discharge(t) <= 0.2*Dem(t)
+  !end-do
+
+  !Respetar límites técnicos y mínimos de las centrales
+  forall(t in 1..T) do
+    max_P_eol(t) := P_eol(t) <= (P_max_eol + Cap_eol)*Curva_eol(t)
+    max_P_sol(t) := P_sol(t) <= (P_max_sol + Cap_sol)*Curva_sol(t)
+  end-do
+
+  !Restricciones de baterías
+  forall(t in 2..T) do
+  	Baterias(t,1) := E_bat(t,1) = E_bat(t-1,1) - P_bat_discharge(t,1)/Ef_bat_desc + P_bat_charge(t,1)*Ef_bat_carg
+  	Baterias(1,1) := E_bat(1,1) = (E_max_bat(1)*T_1)/2 ! Acotar este valor puede cambiar la potencia en baterías propuesta por el modelo
+  	Baterias(t,2) := E_bat(t,2) = E_bat(t-1,2) - P_bat_discharge(t,2)/Ef_bat_desc + P_bat_charge(t,2)*Ef_bat_carg
+  	Baterias(1,2) := E_bat(1,2) = (E_max_bat(2)*T_2)/2
+  	Baterias(t,3) := E_bat(t,3) = E_bat(t-1,3) - P_bat_discharge(t,3)/Ef_bat_desc + P_bat_charge(t,3)*Ef_bat_carg
+  	Baterias(1,3) := E_bat(1,3) = (E_max_bat(3)*T_3)/2
+  	Baterias(t,4) := E_bat(t,4) = E_bat(t-1,4) - P_bat_discharge(t,4)/Ef_bat_desc + P_bat_charge(t,4)*Ef_bat_carg
+  	Baterias(1,4) := E_bat(1,4) = (E_max_bat(4)*T_4)/2
+  	Baterias(t,5) := E_bat(t,5) = E_bat(t-1,5) - P_bat_discharge(t,5)/Ef_bat_desc + P_bat_charge(t,5)*Ef_bat_carg
+  	Baterias(1,5) := E_bat(1,5) = (E_max_bat(5)*T_5)/2
+  	Baterias(t,6) := E_bat(t,6) = E_bat(t-1,6) - P_bat_discharge(t,6)/Ef_bat_desc + P_bat_charge(t,6)*Ef_bat_carg
+  	Baterias(1,6) := E_bat(1,6) = (E_max_bat(6)*T_6)/2
+  	Baterias(t,7) := E_bat(t,7) = E_bat(t-1,7) - P_bat_discharge(t,7)/Ef_bat_desc + P_bat_charge(t,7)*Ef_bat_carg
+  	Baterias(1,7) := E_bat(1,7) = (E_max_bat(7)*T_7)/2
+  end-do
+
+  !!! DESACOPLADO TEMPORALMENTE
+
+  !forall(m in 1..731,t in 2..24) do
+  !  Baterias(t + (m-1)*24) := E_bat(t + (m-1)*24) = E_bat(t + (m-1)*24 - 1) - P_bat_discharge(t + (m-1)*24)/Ef_bat_desc + P_bat_charge(t + (m-1)*24)*Ef_bat_carg
+  !  Baterias(1 + (m-1)*24) := E_bat(1 + (m-1)*24) = (E_max_bat_1*T_1*k)/2
+  !end-do
+
+  forall(t in 1..T) do
+    max_E_bat(t,1):= E_bat(t,1) <= E_max_bat(1)*T_1
+    max_E_bat(t,2):= E_bat(t,2) <= E_max_bat(2)*T_2
+    max_E_bat(t,3):= E_bat(t,3) <= E_max_bat(3)*T_3
+    max_E_bat(t,4):= E_bat(t,4) <= E_max_bat(4)*T_4
+    max_E_bat(t,5):= E_bat(t,5) <= E_max_bat(5)*T_5
+    max_E_bat(t,6):= E_bat(t,6) <= E_max_bat(6)*T_6
+    max_E_bat(t,7):= E_bat(t,7) <= E_max_bat(7)*T_7
+  end-do
+
+  forall(t in 1..T) do
+    max_P_bat1(t,1):= P_bat_discharge(t,1) <= Cap_bat_1*T_1
+    max_P_bat2(t,1):= P_bat_charge(t,1) <= Cap_bat_1*T_1
+    max_P_bat1(t,2):= P_bat_discharge(t,2) <= Cap_bat_1*T_2
+    max_P_bat2(t,2):= P_bat_charge(t,2) <= Cap_bat_1*T_2
+    max_P_bat1(t,3):= P_bat_discharge(t,3) <= Cap_bat_1*T_3
+    max_P_bat2(t,3):= P_bat_charge(t,3) <= Cap_bat_1*T_3
+    max_P_bat1(t,4):= P_bat_discharge(t,4) <= Cap_bat_1*T_4
+    max_P_bat2(t,4):= P_bat_charge(t,4) <= Cap_bat_1*T_4
+    max_P_bat1(t,5):= P_bat_discharge(t,5) <= Cap_bat_1*T_5
+    max_P_bat2(t,5):= P_bat_charge(t,5) <= Cap_bat_1*T_5
+    max_P_bat1(t,6):= P_bat_discharge(t,6) <= Cap_bat_1*T_6
+    max_P_bat2(t,6):= P_bat_charge(t,6) <= Cap_bat_1*T_6
+    max_P_bat1(t,7):= P_bat_discharge(t,7) <= Cap_bat_1*T_7
+    max_P_bat2(t,7):= P_bat_charge(t,7) <= Cap_bat_1*T_7
+  end-do
+  
+  !forall(t in 1..T) do
+  !  Reserva_bat_P(t):= Reserva_bat(t) <= Cap_bat_1*T_1 - P_bat_discharge(t)
+  !  Reserva_bat_E(t):= Reserva_bat(t)/Ef_bat_desc <= E_bat(t)
+  !end-do
+
+  !forall(t in 1..T) do
+  !  if (P_bat_charge(t)>0) then
+  !    P_bat_discharge(t) := 0
+  !  end-if
+  !  if (P_bat_discharge(t)>0) then
+  !    P_bat_charge(t) := 0
+  !  end-if
+  !end-do
+
+
+  !-------------------------------------------------------------------------------------
+  !OPTIMIZACIÓN
+  !-------------------------------------------------------------------------------------
+
+  minimize(XPRS_BAR,FO)
+
+  !-------------------------------------------------------------------------------------
+  !RESULTADOS
+  !-------------------------------------------------------------------------------------
+
+  writeln('--------------')
+
+  !Costo total de operación + posible inversión
+  Solucion:= getobjval
+  writeln("")
+  writeln('Costo total                                 = ', Solucion/1000000, ' $MMUSD')
+  writeln('Capacidad instalada de baterias de 1 MWh = ', T_1.sol, ' MW')
+  writeln('Capacidad instalada de baterias de 3 MWh = ', T_2.sol, ' MW')
+  writeln('Capacidad instalada de baterias de 6 MWh = ', T_3.sol, ' MW')
+  writeln('Capacidad instalada de baterias de 10 MWh = ', T_4.sol, ' MW')
+  writeln('Capacidad instalada de baterias de 12 MWh = ', T_5.sol, ' MW')
+  writeln('Capacidad instalada de baterias de 24 MWh = ', T_6.sol, ' MW')
+  writeln('Capacidad instalada de baterias de 48 MWh = ', T_7.sol, ' MW')
+  writeln('Capacidad en nuevas centrales eólicas       = ', Cap_eol.sol, ' MW')
+  writeln('Capacidad en nuevas centrales fotovoltaicas = ', Cap_sol.sol, ' MW')
+  !forall(t in 1..T) writeln('P bateria : ', P_bat_discharge(1,t).sol - P_bat_charge(1,t).sol)
+  writeln("")
+  writeln(INV_bat(1,Esce))
+
+  Cap_final(1) := T_1.sol
+  Cap_final(2) := T_2.sol
+  Cap_final(3) := T_3.sol
+  Cap_final(4) := T_4.sol
+  Cap_final(5) := T_5.sol
+  Cap_final(6) := T_6.sol
+  Cap_final(7) := T_7.sol
+  Cap_final_eol := Cap_eol.sol
+  Cap_final_sol := Cap_sol.sol
+  Costos_op := Solucion/1000000
+  
+  forall(t in 1..T) do
+    Ver_eol(t) := (P_max_eol+Cap_eol.sol)*Curva_eol(t) - P_eol(t).sol
+    Ver_sol(t) := (P_max_sol+Cap_sol.sol)*Curva_sol(t) - P_sol(t).sol
+  end-do
+
+  forall(i in 1..Tec,t in 1..T) do
+    P_charge(t,i):= P_bat_charge(t,i).sol
+    P_discharge(t,i):= P_bat_discharge(t,i).sol
+    Desp_bat(t,i):= P_bat_discharge(t,i).sol - P_bat_charge(t,i).sol
+    Desp_eol(t):= P_eol(t).sol
+    Desp_sol(t):= P_sol(t).sol
+    E_final(t,i):= E_bat(t,i).sol
+  end-do
+
+  !initialisations to "mmsheet.excel:"+'Competencia_BESS.xlsx'
+  !  horas               as "grow;noindex;horas"
+  !  Cap_final           as "grow;noindex;Cap_final"
+  !  Cap_final_sol       as "grow;noindex;Cap_final_sol"
+  !  Cap_final_eol       as "grow;noindex;Cap_final_eol"
+  !  Costos_op           as "grow;noindex;Costos_op"
+  !  Demanda_F           as "grow;noindex;Demanda_F_con_bat"
+  !  Desp_eol            as "grow;noindex;P_eol"
+  !  Desp_sol            as "grow;noindex;P_sol"
+  !  LL_final            as "grow;noindex;LL"
+  !  P_charge            as "grow;noindex;P_charge"
+  !  P_discharge         as "grow;noindex;P_discharge"
+  !  Desp_bat            as "grow;noindex;Desp_bat"
+  !  E_final             as "grow;noindex;E_final"
+  !  Dem                 as "grow;noindex;Demanda"
+  !  Ver_eol             as "grow;noindex;Ver_eol"
+  !  Ver_sol             as "grow;noindex;Ver_sol"
+  !end-initialisations
+
+end-model
