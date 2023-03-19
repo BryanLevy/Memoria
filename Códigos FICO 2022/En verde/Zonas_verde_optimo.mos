@@ -1,0 +1,286 @@
+model Test_Baterias_3
+  options noimplicit
+  uses "mmxprs","mmsheet"
+
+  declarations
+
+
+    !Simulación con datos de la operación del SEN durante el año 2021
+
+    !365 días en total
+    T = 24*(365) !número de horas
+    !Número de duración de almacenamiento diferentes
+    N = 8
+    !Número de escenarios
+    Es = 3
+    !Número de zonas
+    Z = 12
+    !Índice
+    I: integer
+
+    !Centrales ERNC
+    !! Eólica
+
+    !!! Parámteros
+    P_max_eol: array (1..Z) of real
+    Curva_eol: array (1..T,1..Z) of real
+    INV_eol: array(1..Es) of real
+    Reserva_eol: array (1..T) of real
+    !!! Variables decisión
+    P_eol: array(1..T,1..Z) of mpvar
+    Cap_eol: array(1..Z) of mpvar
+    !!! Restricciones
+    max_P_eol, min_P_eol: array(1..T,1..Z) of linctr
+
+
+    !! Solar
+
+    !!! Parámetros
+    P_max_sol: array (1..Z) of real
+    Curva_sol: array (1..T,1..Z) of real
+    INV_sol: array(1..Es) of real
+    Reserva_sol: array (1..T) of real
+    !!! Variables Decisión
+    P_sol: array(1..T,1..Z) of mpvar
+    Cap_sol: array(1..Z) of mpvar
+    !!! Restricciones
+    max_P_sol, min_P_sol: array(1..T,1..Z) of linctr
+
+
+    !Baterías
+
+    !!! Parámetros
+    INV_bat_P, INV_bat_E: real
+    INV_bat: array(1..N,1..Es) of real
+    E_max_bat: array(1..N) of integer
+    E_max_bat_1, E_max_bat_2, E_max_bat_3: real
+    Cap_bat_1, Cap_bat_2, Cap_bat_3: real
+    Ef_bat_desc, Ef_bat_carg: real
+    !!! Variables decisión
+    P_bat_charge: array(1..T) of mpvar
+    P_bat_discharge: array(1..T) of mpvar
+    E_bat: array(1..T) of mpvar
+    Reserva_bat: array(1..T) of mpvar
+    T_1, T_2, T_3: mpvar !Tecnologías, T_1 con 1 MW y 1 MWh
+    !!! Restricciones
+    max_E_bat, min_E_bat: array(1..T) of linctr
+    max_P_bat1, max_P_bat2: array(1..T) of linctr
+    Baterias: array(1..T) of linctr
+    Reserva_bat_P, Reserva_bat_E: array(1..T) of linctr
+
+
+
+    !Otros
+
+    !!! Parámetros
+    Dem: array(1..T) of real
+    horas: list of integer
+    Esce: integer
+    !!! Restricciones
+    FO: linctr
+    balance: array(1..T) of linctr
+    Reserva_total: array(1..T) of linctr
+
+
+    !-----(Resultados)-----!
+
+    !Valor función objetivo
+    Solucion: real
+
+    !Capacidad instalada
+    Cap_final: array(1..N) of real
+    Cap_final_sol: array(1..N,1..Z) of real
+    Cap_final_eol: array(1..N,1..Z) of real
+
+    !Costos operacion
+    Costos_op: array(1..N) of real
+
+    !Despachos
+    Desp_eol: array(1..T,1..Z) of real
+    Desp_sol: array(1..T,1..Z) of real
+    Desp_bat: array(1..T) of real
+    LL_final: array(1..T) of real
+
+    !Demanda no suministrada
+    Demanda_F: array(1..N) of real
+
+    !Carga y descarga baterias
+    P_charge: array(1..T) of real
+    P_discharge: array(1..T) of real
+    P_bat: array(1..T) of real
+    E_final: array(1..T) of real
+    
+    !Vertimiento
+    Ver_sol: array(1..T,1..N) of real
+    Ver_eol: array(1..T,1..N) of real
+    
+    !Duales de restriccion de demanda
+    Cmg: array(1..T) of real
+    
+  end-declarations
+
+  !Importación de datos desde Excel
+  initialisations from 'mmsheet.excel:' + 'Datos_Memoria_5.xlsx'
+    P_max_eol               as "noindex;P_max_eol"
+    Curva_eol               as "noindex;Curva_eol"
+    INV_eol                 as "noindex;Inv_eol"
+    P_max_sol               as "noindex;P_max_sol"
+    Curva_sol               as "noindex;Curva_sol"
+    INV_sol                 as "noindex;Inv_sol"
+    Ef_bat_desc             as "noindex;Ef_bat_desc"
+    Ef_bat_carg             as "noindex;Ef_bat_carg"
+    INV_bat                 as "noindex;Inv_bat_test_1"
+    Dem                     as "noindex;Demanda"
+    E_max_bat               as "noindex;E_max_bat_test_1"
+  end-initialisations
+
+  E_max_bat_1 := 1
+  Cap_bat_1 := 1
+  I := 1
+  horas := [6, 7, 8, 9, 10, 11, 12, 13]
+  Esce := 2
+
+  !Considerar capacidades de 1, 6, 12, 24 y 48 horas
+
+  forall(k in horas) do
+
+  !-----(Planteamiento del problema)-----!
+
+  !Función objetivo
+  !eol 7 y sol 1-2 mwh cvnc problema degenerado
+  !La idea de esta función objetivo es que nos entregue la capacidad de baterías óptima que hay que instalar, junto con las capacidades eólica y solar
+
+  FO:= T_1*(INV_bat(I,Esce)) + sum(i in 1..Z) (INV_eol(Esce)*Cap_eol(i)) +
+       sum(i in 1..Z) (INV_sol(Esce)*Cap_sol(i)) + sum(t in 1..T, i in 1..Z) (7*P_eol(t,i) + 2*P_sol(t,i))
+
+  !Sujeto a:
+
+  !Ecuación de balance
+  forall(t in 1..T) do
+    balance(t):= sum(i in 1..Z) (P_eol(t,i) + P_sol(t,i)) + P_bat_discharge(t) = Dem(t) + P_bat_charge(t)
+  end-do
+  
+  !Reservas del sistema
+  !forall(t in 1..T) do
+  !  Reserva_total(t):= (P_eol(t) + Cap_eol)*Curva_eol(t) + (P_sol + Cap_sol)*Curva_sol(t) + T_1*Cap_bat_1 - P_eol(t) - P_sol(t) - P_discharge(t) <= 0.2*Dem(t)
+  !end-do
+
+  !Respetar límites técnicos y mínimos de las centrales
+  forall(t in 1..T, i in 1..Z) do
+    max_P_eol(t,i) := P_eol(t,i) <= Cap_eol(i)*Curva_eol(t,i)
+    !min_P_eol(t) := P_eol(t) >= P_max_eol*Curva_eol(t)
+    max_P_sol(t,i) := P_sol(t,i) <= Cap_sol(i)*Curva_sol(t,i)
+    !min_P_sol(t) := P_sol(t) >= P_max_sol*Curva_sol(t)
+  end-do
+
+  !Restricciones de baterías
+  forall(t in 2..T) do
+  	Baterias(t) := E_bat(t) = E_bat(t-1) - P_bat_discharge(t)/Ef_bat_desc + P_bat_charge(t)*Ef_bat_carg
+  	Baterias(1) := E_bat(1) = (E_max_bat(I)*T_1)/2 ! Acotar este valor puede cambiar la potencia en baterías propuesta por el modelo
+    Baterias(8760) := E_bat(8760) = (E_max_bat(I)*T_1)/2
+  end-do
+
+  !!! DESACOPLADO TEMPORALMENTE
+
+  !forall(m in 1..731,t in 2..24) do
+  !  Baterias(t + (m-1)*24) := E_bat(t + (m-1)*24) = E_bat(t + (m-1)*24 - 1) - P_bat_discharge(t + (m-1)*24)/Ef_bat_desc + P_bat_charge(t + (m-1)*24)*Ef_bat_carg
+  !  Baterias(1 + (m-1)*24) := E_bat(1 + (m-1)*24) = (E_max_bat_1*T_1*k)/2
+  !end-do
+
+  forall(t in 1..T) do
+    max_E_bat(t):= E_bat(t) <= E_max_bat(I)*T_1
+  end-do
+
+  forall(t in 1..T) do
+    max_P_bat1(t):= P_bat_discharge(t) <= Cap_bat_1*T_1
+    max_P_bat2(t):= P_bat_charge(t) <= Cap_bat_1*T_1
+  end-do
+  
+  !forall(t in 1..T) do
+  !  Reserva_bat_P(t):= Reserva_bat(t) <= Cap_bat_1*T_1 - P_bat_discharge(t)
+  !  Reserva_bat_E(t):= Reserva_bat(t)/Ef_bat_desc <= E_bat(t)
+  !end-do
+
+  !forall(t in 1..T) do
+  !  if (P_bat_charge(t)>0) then
+  !    P_bat_discharge(t) := 0
+  !  end-if
+  !  if (P_bat_discharge(t)>0) then
+  !    P_bat_charge(t) := 0
+  !  end-if
+  !end-do
+
+
+  !-------------------------------------------------------------------------------------
+  !OPTIMIZACIÓN
+  !-------------------------------------------------------------------------------------
+
+  minimize(XPRS_BAR,FO)
+
+  !-------------------------------------------------------------------------------------
+  !RESULTADOS
+  !-------------------------------------------------------------------------------------
+
+  writeln('--------------')
+
+  !Costo total de operación + posible inversión
+  Solucion:= getobjval
+  writeln('Iteración con almacenamiento para ', k,' horas')
+  writeln("")
+  writeln('Costo total                                 = ', Solucion/1000000, ' $MMUSD')
+  writeln('Capacidad instalada de baterias             = ', T_1.sol, ' MW')
+  !writeln('Capacidad en nuevas centrales eólicas       = ', Cap_eol.sol, ' MW')
+  !writeln('Capacidad en nuevas centrales fotovoltaicas = ', Cap_sol.sol, ' MW')
+  !forall(t in 1..T) writeln('P bateria : ', P_bat_discharge(1,t).sol - P_bat_charge(1,t).sol)
+  writeln("")
+  writeln(INV_bat(I,2))
+
+  Cap_final(I) := T_1.sol
+  forall(i in 1..Z) do
+    Cap_final_eol(I,i) := Cap_eol(i).sol
+    Cap_final_sol(I,i) := Cap_sol(i).sol
+  end-do
+  Costos_op(I) := Solucion/1000000
+  
+  !forall(t in 1..T) do
+  !  Ver_eol(t,I) := P_max_eol(i) + sum(i in 1..T) (Cap_eol(i).sol) - P_eol(t,i).sol
+  !  Ver_sol(t,I) := P_max_sol(i) + sum(t in 1..T) (Cap_sol(i).sol) - P_sol(t,i).sol
+  !end-do
+
+  if (I=3) then
+    forall(t in 1..T, i in 1..Z) do
+      P_charge(t):= P_bat_charge(t).sol
+      P_discharge(t):= P_bat_discharge(t).sol
+      Desp_bat(t):= P_bat_discharge(t).sol - P_bat_charge(t).sol
+      Desp_eol(t,i):= P_eol(t,i).sol
+      Desp_sol(t,i):= P_sol(t,i).sol
+      E_final(t):= E_bat(t).sol
+      Cmg(t):= getdual(balance(t))
+    end-do
+  end-if
+  
+   I += 1
+
+  initialisations to "mmsheet.excel:"+'Zonas_verde_optimo.xlsx'
+    horas               as "grow;noindex;horas"
+    Cap_final           as "grow;noindex;Cap_final"
+    Cap_final_sol       as "grow;noindex;Cap_final_sol"
+    Cap_final_eol       as "grow;noindex;Cap_final_eol"
+    Costos_op           as "grow;noindex;Costos_op"
+  !  Demanda_F           as "grow;noindex;Demanda_F_con_bat"
+    Desp_eol            as "grow;noindex;Desp_eol"
+    Desp_sol            as "grow;noindex;Desp_sol"
+  !  LL_final            as "grow;noindex;LL"
+    P_charge            as "grow;noindex;Carga_bat"
+    P_discharge         as "grow;noindex;Pot_bat"
+  !  Desp_bat            as "grow;noindex;Desp_bat"
+  !  E_final             as "grow;noindex;E_final"
+    Dem                 as "grow;noindex;Demanda_2"
+  !  Ver_eol             as "grow;noindex;Ver_eol"
+  !  Ver_sol             as "grow;noindex;Ver_sol"
+    Cmg                 as "grow;noindex;Cmg_2"
+  end-initialisations
+
+end-do
+
+end-model
